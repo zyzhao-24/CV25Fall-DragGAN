@@ -1,0 +1,3 @@
+[submodule "DragGAN"]
+	path = DragGAN
+	url = https://github.com/XingangPan/DragGAN

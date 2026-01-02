@@ -1,3 +1,6 @@
 [submodule "DragGAN"]
 	path = DragGAN
 	url = https://github.com/XingangPan/DragGAN
+[submodule "UserControllableLT"]
+	path = UserControllableLT
+	url = https://github.com/endo-yuki-t/UserControllableLT

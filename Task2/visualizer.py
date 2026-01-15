@@ -14,6 +14,9 @@ from gradio_utils import (ImageMask, draw_mask_on_image, draw_points_on_image,
                           on_change_single_global_state)
 from viz.renderer import Renderer, add_watermark_np
 
+# Import cascaded blending module
+from core_blending import record_mask_snapshot
+
 parser = ArgumentParser()
 parser.add_argument('--share', action='store_true',default='True')
 parser.add_argument('--cache-dir', type=str, default='./checkpoints')
@@ -148,6 +151,21 @@ def preprocess_mask_info(global_state, image):
 
     global_state['mask'] = updated_mask
     # global_state['last_mask'] = None  # clear buffer
+    
+    # Record feature snapshot when editing mask
+    if editing_mode in ['add_mask', 'remove_mask'] and last_mask is not None:
+        try:
+            renderer = global_state['renderer']
+            snapshot_features = record_mask_snapshot(renderer)
+            
+            # Save snapshot to global state and renderer
+            global_state['mask_snapshot_features'] = snapshot_features
+            renderer.mask_snapshot_features = snapshot_features
+            
+            print(f"[visualizer] Recorded feature snapshots for cascaded blending: {len(snapshot_features)} layers")
+        except Exception as e:
+            print(f"[visualizer] Failed to record feature snapshots: {e}")
+    
     return global_state
 
 

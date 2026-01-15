@@ -12,9 +12,12 @@ import cv2
 import numpy as np
 import copy
 
+# Import cascaded blending module
+from core_blending import apply_cascaded_blending, prepare_blending_mask
+
 
 # Handle tracking method 'raft', 'L2'
-tracking_method = 'raft'
+tracking_method = 'L2'
 is_save = False
 
 
@@ -275,6 +278,61 @@ def render_drag_impl(renderer, res,
                              dim=[1, 2], keepdim=True).clip(1e-8, 1e8)
     img = img * (10 ** (img_scale_db / 20))
     img = (img * 127.5 + 128).clamp(0, 255).to(torch.uint8).permute(1, 2, 0)
+
+    # Check if cascaded blending is needed
+    if (hasattr(renderer, 'mask_snapshot_features') and 
+        renderer.mask_snapshot_features is not None and
+        mask is not None and mask.min() == 0 and mask.max() == 1):
+        
+        try:
+            # Prepare blending mask
+            blending_mask = prepare_blending_mask(mask, renderer._device)
+            
+            # Calculate blending coefficients: start from layer 6, alpha=0.5 for first layer, then halve each subsequent layer
+            snapshot_features = renderer.mask_snapshot_features
+            num_layers = len(snapshot_features)
+            start_idx = 6  # Start blending from layer 6 to avoid affecting gradient-computed layers
+            
+            # Create blending coefficients list
+            blend_coeffs = [0.0] * start_idx  # Layers before start_idx don't blend
+            
+            # Calculate blending coefficients: alpha=0.5 for first blending layer, then halve original feature weight
+            for i in range(start_idx, num_layers):
+                layer_idx = i - start_idx  # Index in blending layers (0 for first blending layer)
+                # alpha is the weight for snapshot features: 0.5, 0.25, 0.125, ...
+                alpha = 0.5 ** (layer_idx + 1)
+                blend_coeffs.append(alpha)
+            
+            print(f"[core] Calculating blending coefficients: starting from layer {start_idx}")
+            print(f"[core] Blending coefficients example: {blend_coeffs[start_idx:start_idx+min(5, len(blend_coeffs)-start_idx)]}...")
+            
+            # Generate cascaded blended image
+            with torch.no_grad():
+                blended_img, _ = apply_cascaded_blending(
+                    G, ws, 
+                    snapshot_features, 
+                    blending_mask,
+                    label=label,
+                    truncation_psi=trunc_psi,
+                    noise_mode=noise_mode,
+                    start_idx=start_idx,
+                    blend_coeffs=blend_coeffs
+                )
+            
+            # Process blended image
+            blended_img = blended_img[0]
+            if img_normalize:
+                blended_img = blended_img / blended_img.norm(float('inf'),
+                                                           dim=[1, 2], keepdim=True).clip(1e-8, 1e8)
+            blended_img = blended_img * (10 ** (img_scale_db / 20))
+            blended_img = (blended_img * 127.5 + 128).clamp(0, 255).to(torch.uint8).permute(1, 2, 0)
+            
+            # Use blended image
+            img = blended_img
+            print(f"[core] Using cascaded blended image (mask region remains unchanged)")
+        except Exception as e:
+            print(f"[core] Cascaded blending failed: {e}")
+            print(f"[core] Using original image")
 
     if is_save:
         if not hasattr(renderer, 'save_count'):

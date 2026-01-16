@@ -304,7 +304,7 @@ def render_drag_impl(renderer, res,
             # Calculate blending coefficients: start from layer 6, alpha=0.5 for first layer, then halve each subsequent layer
             snapshot_features = renderer.mask_snapshot_features
             num_layers = len(snapshot_features)
-            start_idx = 6  # Start blending from layer 6 to avoid affecting gradient-computed layers
+            start_idx = 3  # Start blending from layer 3
             
             # Create blending coefficients list
             blend_coeffs = [0.0] * start_idx  # Layers before start_idx don't blend

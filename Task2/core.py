@@ -20,8 +20,9 @@ from core_blending import apply_cascaded_blending, prepare_blending_mask
 tracking_method = 'L2'
 is_save = False
 
-# Handle loss method
-mixed_loss = True
+# Handle output and loss method
+use_blended_output = True
+multilayer_loss = True
 
 class RAFTArgs:
     def __init__(self, model='', small=False, mixed_precision=False, alternate_corr=False):
@@ -220,9 +221,6 @@ def render_drag_impl(renderer, res,
             renderer.feat0_resize = F.interpolate(
                 feat[feature_idx].detach(), [h, w], mode='bilinear')
             
-            if mixed_loss and hasattr(renderer, 'mask_snapshot_features') and renderer.mask_snapshot_features is not None:
-                renderer.snapshot_feat_resize = F.interpolate(renderer.mask_snapshot_features[feature_idx].detach(), [h, w], mode='bilinear')
-            
             renderer.feat_refs = []
             for point in points:
                 py, px = round(point[0]), round(point[1])
@@ -264,15 +262,19 @@ def render_drag_impl(renderer, res,
         if mask is not None:
             if mask.min() == 0 and mask.max() == 1:
                 mask_usq = mask.to(renderer._device).unsqueeze(0).unsqueeze(0)
-                loss_fix = F.l1_loss(feat_resize * mask_usq,
-                                     renderer.feat0_resize * mask_usq)
-                
-                if mixed_loss and hasattr(renderer, 'snapshot_feat_resize') and renderer.snapshot_feat_resize is not None:
-                    # mixed loss: compute loss with masked area of original features
-                    loss_orig = F.l1_loss(feat_resize * mask_usq, 
-                                          renderer.snapshot_feat_resize * mask_usq)
-                    loss_fix = loss_fix * 0.5 + loss_orig * 0.5
-                
+                if multilayer_loss:
+                    # Multi-layer feature loss
+                    loss_fix = 0
+                    for fi in range(3, feature_idx + 1):
+                        feat_resize = F.interpolate(
+                            feat[fi], [h, w], mode='bilinear')
+                        stored_feat_resize = F.interpolate(
+                            renderer.mask_snapshot_features[fi], [h, w], mode='bilinear')
+                        loss_fix += F.l1_loss(feat_resize * mask_usq,
+                                             stored_feat_resize * mask_usq)
+                else:
+                    loss_fix = F.l1_loss(feat_resize * mask_usq,
+                                        renderer.feat0_resize * mask_usq)
                 loss += lambda_mask * loss_fix
 
         loss += reg * F.l1_loss(ws, renderer.w0)  # latent code regularization
@@ -295,7 +297,8 @@ def render_drag_impl(renderer, res,
     # Check if cascaded blending is needed
     if (hasattr(renderer, 'mask_snapshot_features') and 
         renderer.mask_snapshot_features is not None and
-        mask is not None and mask.min() == 0 and mask.max() == 1):
+        mask is not None and mask.min() == 0 and mask.max() == 1 and 
+        use_blended_output):
         
         try:
             # Prepare blending mask

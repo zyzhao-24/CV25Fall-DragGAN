@@ -43,18 +43,19 @@ def prepare_blending_mask(mask: torch.Tensor, device: torch.device) -> torch.Ten
     return mask_tensor
 
 
-def record_mask_snapshot(renderer, trunc_psi: float = 0.7) -> List[torch.Tensor]:
+def record_mask_snapshot(renderer, trunc_psi: float = 0.7):
     """
-    Record feature map snapshots when editing mask
+    Record image and feature map snapshots when editing mask
     
-    Called when editing mask in GUI, saves current feature maps for subsequent blending
+    Called when editing mask in GUI, saves current image and feature maps for subsequent blending
     
     Args:
         renderer: Renderer object
         trunc_psi: Truncation psi value
         
     Returns:
-        snapshot_features: List of feature map snapshots for each layer
+        tuple: image_snapshot: Current image snapshot [1, 3, H, W], value range [0, 255]
+               snapshot_features: List of feature map snapshots for each layer
     """
     G = renderer.G
     ws = renderer.w
@@ -66,9 +67,9 @@ def record_mask_snapshot(renderer, trunc_psi: float = 0.7) -> List[torch.Tensor]
     
     label = torch.zeros([1, G.c_dim], device=renderer._device)
     
-    # Get current feature maps (without gradient computation)
+    # Get current image and feature maps (without gradient computation)
     with torch.no_grad():
-        _, features = G(ws, label, truncation_psi=trunc_psi,
+        img, features = G(ws, label, truncation_psi=trunc_psi,
                        noise_mode='const', input_is_w=True, return_feature=True)
     
     # Save feature map snapshots (deep copy)
@@ -76,8 +77,12 @@ def record_mask_snapshot(renderer, trunc_psi: float = 0.7) -> List[torch.Tensor]
     for feat in features:
         snapshot_features.append(feat.detach().clone())
     
-    print(f"[core_blending] Recorded {len(snapshot_features)} layer feature map snapshots for cascaded blending")
-    return snapshot_features
+    # Save image snapshot (convert to [0, 255] range)
+    # img from G is approx [-1, 1], shape [1, 3, H, W]
+    img_snapshot = (img * 127.5 + 128).clamp(0, 255).detach().clone()
+    
+    print(f"[core_blending] Recorded {len(snapshot_features)} layer feature map snapshots and image for cascaded blending")
+    return img_snapshot, snapshot_features
 
 
 class CascadedBlendingSynthesisNetwork(torch.nn.Module):

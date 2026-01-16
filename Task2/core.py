@@ -22,7 +22,7 @@ is_save = False
 
 # Handle output and loss method
 use_blended_output = True
-multilayer_loss = True
+fixloss_type = ['single', 'multilayer', 'raft'][0]
 
 class RAFTArgs:
     def __init__(self, model='', small=False, mixed_precision=False, alternate_corr=False):
@@ -69,21 +69,10 @@ def save_flow_viz(img, flo, save_path):
 
 
 def point_tracking_raft(renderer, points, last_img, curr_img, h, w):
-    if not hasattr(renderer, 'raft_model') or renderer.raft_model is None:
-        print("Initializing RAFT model...")
-        ckpt = 'checkpoints/raft-things.pth'
-        args = RAFTArgs(model=ckpt)
-
-        if not os.path.exists(ckpt):
-            print(
-                f"Warning: RAFT checkpoint not found at {ckpt}. RAFT tracking will fail.")
-            return points
-
-        renderer.raft_model = torch.nn.DataParallel(RAFT(args))
-        renderer.raft_model.load_state_dict(torch.load(ckpt))
-        renderer.raft_model = renderer.raft_model.module
-        renderer.raft_model.to(renderer._device)
-        renderer.raft_model.eval()
+    # Load RAFT model for point tracking
+    if not load_raft_model(renderer, model_type='tracking'):
+        print("Warning: Failed to load RAFT model for point tracking.")
+        return points
 
     with torch.no_grad():
         # Prepare images: [1, 3, H, W], 0-255
@@ -159,6 +148,117 @@ def motion_supervision(renderer, feat_resize, points, targets, r1, h, w):
                                      :, relis, reljs].detach(), target)
 
     return loss_motion, stop
+
+
+def load_raft_model(renderer, model_type='mask'):
+    """
+    Load RAFT model for mask preservation or point tracking.
+    
+    Args:
+        renderer: Renderer object
+        model_type: 'mask' for mask preservation, 'tracking' for point tracking
+        
+    Returns:
+        True if model loaded successfully, False otherwise
+    """
+    if model_type == 'mask':
+        attr_name = 'raft_mask_model'
+    elif model_type == 'tracking':
+        attr_name = 'raft_model'
+    else:
+        print(f"[RAFT] Unknown model type: {model_type}")
+        return False
+    
+    # Check if model already loaded
+    if hasattr(renderer, attr_name) and getattr(renderer, attr_name) is not None:
+        return True
+    
+    print(f"[RAFT] Initializing RAFT model for {model_type}...")
+    ckpt = 'checkpoints/raft-things.pth'
+    args = RAFTArgs(model=ckpt)
+    
+    if not os.path.exists(ckpt):
+        print(f"[RAFT] Warning: RAFT checkpoint not found at {ckpt}")
+        return False
+    
+    try:
+        # Load RAFT model
+        model = torch.nn.DataParallel(RAFT(args))
+        model.load_state_dict(torch.load(ckpt))
+        model = model.module
+        model.to(renderer._device)
+        
+        # Freeze all parameters
+        for param in model.parameters():
+            param.requires_grad = False
+        
+        model.eval()
+        setattr(renderer, attr_name, model)
+        print(f"[RAFT] Model loaded and frozen for {model_type}")
+        return True
+    except Exception as e:
+        print(f"[RAFT] Failed to load model for {model_type}: {e}")
+        return False
+
+
+def compute_raft_mask_loss(renderer, curr_img, mask_usq, lambda_mask=10):
+    """
+    Compute RAFT-based mask preservation loss.
+    
+    Uses optical flow magnitude between reference image (renderer.mask_snapshot_image) 
+    and current image to keep mask region unchanged.
+    
+    Args:
+        renderer: Renderer object
+        curr_img: Current image tensor [1, 3, H, W], value range [0, 255]
+        mask_usq: Binary mask tensor [1, 1, H, W], 0 for background, 1 for region to preserve
+        lambda_mask: Loss weight coefficient
+        
+    Returns:
+        loss_fix: RAFT-based mask preservation loss
+    """
+    # Check if we have a reference image (saved in visualizer.py)
+    if not hasattr(renderer, 'mask_snapshot_image') or renderer.mask_snapshot_image is None:
+        print("[RAFT] Warning: No mask snapshot image found. Using zero loss.")
+        return torch.tensor(0.0, device=renderer._device, requires_grad=True)
+    
+    # Get reference image from renderer
+    ref_img = renderer.mask_snapshot_image
+    
+    # Ensure images are on the same device
+    if ref_img.device != curr_img.device:
+        ref_img = ref_img.to(curr_img.device)
+    
+    # Load RAFT model for mask preservation
+    if not load_raft_model(renderer, model_type='mask'):
+        return torch.tensor(0.0, device=renderer._device, requires_grad=True)
+    
+    # Use InputPadder to handle dimensions
+    padder = InputPadder(ref_img.shape)
+    ref_img_padded, curr_img_padded = padder.pad(ref_img, curr_img)
+    
+    # RAFT forward pass - NO torch.no_grad()!
+    # Model parameters are frozen but gradients can flow through computation graph
+    flow_low, flow_up = renderer.raft_mask_model(
+        ref_img_padded, 
+        curr_img_padded, 
+        iters=12,  # Fewer iterations for speed
+        test_mode=True
+    )
+    
+    # Unpad to original size
+    flow = padder.unpad(flow_up)
+    
+    # Compute flow magnitude: sqrt(dx^2 + dy^2)
+    flow_magnitude = torch.sqrt(flow[:, 0:1, :, :]**2 + flow[:, 1:2, :, :]**2 + 1e-8)
+    
+    # Compute masked loss
+    loss = (flow_magnitude * mask_usq).mean()
+    
+    # Apply weight
+    loss_fix = lambda_mask * loss
+    
+    return loss_fix
 
 
 def render_drag_impl(renderer, res,
@@ -262,16 +362,19 @@ def render_drag_impl(renderer, res,
         if mask is not None:
             if mask.min() == 0 and mask.max() == 1:
                 mask_usq = mask.to(renderer._device).unsqueeze(0).unsqueeze(0)
-                if multilayer_loss:
+                if fixloss_type == 'multilayer':
                     # Multi-layer feature loss
                     loss_fix = 0
                     for fi in range(3, feature_idx + 1):
                         feat_resize = F.interpolate(
                             feat[fi], [h, w], mode='bilinear')
                         stored_feat_resize = F.interpolate(
-                            renderer.mask_snapshot_features[fi], [h, w], mode='bilinear')
+                            renderer.mask_snapshot_features[fi].detach(), [h, w], mode='bilinear')
                         loss_fix += F.l1_loss(feat_resize * mask_usq,
                                              stored_feat_resize * mask_usq)
+                elif fixloss_type == 'raft':
+                    # RAFT-based mask preservation loss
+                    loss_fix = 0.02 * compute_raft_mask_loss(renderer, curr_img_raft, mask_usq, lambda_mask)
                 else:
                     loss_fix = F.l1_loss(feat_resize * mask_usq,
                                         renderer.feat0_resize * mask_usq)

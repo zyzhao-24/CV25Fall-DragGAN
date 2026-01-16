@@ -152,19 +152,23 @@ def preprocess_mask_info(global_state, image):
     global_state['mask'] = updated_mask
     # global_state['last_mask'] = None  # clear buffer
     
-    # Record feature snapshot when editing mask
+    # Record feature and image snapshot when editing mask
     if editing_mode in ['add_mask', 'remove_mask'] and last_mask is not None:
         try:
             renderer = global_state['renderer']
-            snapshot_features = record_mask_snapshot(renderer)
+            # record_mask_snapshot now returns (image_snapshot, snapshot_features)
+            image_snapshot, snapshot_features = record_mask_snapshot(renderer)
             
-            # Save snapshot to global state and renderer
+            # Save image snapshot to renderer for RAFT mask loss
+            renderer.mask_snapshot_image = image_snapshot
+            
+            # Save snapshot features to global state and renderer
             global_state['mask_snapshot_features'] = snapshot_features
             renderer.mask_snapshot_features = snapshot_features
             
-            print(f"[visualizer] Recorded feature snapshots for cascaded blending: {len(snapshot_features)} layers")
+            print(f"[visualizer] Recorded image and feature snapshots for cascaded blending: {len(snapshot_features)} layers")
         except Exception as e:
-            print(f"[visualizer] Failed to record feature snapshots: {e}")
+            print(f"[visualizer] Failed to record image and feature snapshots: {e}")
     
     return global_state
 

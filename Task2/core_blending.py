@@ -183,7 +183,7 @@ def apply_cascaded_blending(
     label: Optional[torch.Tensor] = None,
     truncation_psi: float = 0.7,
     noise_mode: str = 'const',
-    start_idx: int = 6,  # Default start from layer 6 to avoid affecting gradient-computed layers
+    start_idx: int = 3,
     blend_coeffs: Optional[List[float]] = None,
     **kwargs
 ) -> Tuple[torch.Tensor, List[torch.Tensor]]:
@@ -200,7 +200,7 @@ def apply_cascaded_blending(
         label: Conditional label
         truncation_psi: Truncation psi value
         noise_mode: Noise mode
-        start_idx: Layer index to start blending (default 6, to avoid affecting gradient-computed layers)
+        start_idx: Layer index to start blending
         blend_coeffs: List of blending coefficients for each layer (must be provided by caller)
         
     Returns:

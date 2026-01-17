@@ -22,8 +22,8 @@ is_save = False
 
 # Handle output and loss method
 use_blended_output = True
-use_blended_loss = True
-fixloss_type = ['single', 'multilayer', 'raft'][0]
+use_blended_loss = False
+fixloss_type = ['single', 'multilayer', 'raft'][2]
 
 class RAFTArgs:
     def __init__(self, model='', small=False, mixed_precision=False, alternate_corr=False):
@@ -202,7 +202,7 @@ def load_raft_model(renderer, model_type='mask'):
         return False
 
 
-def compute_raft_mask_loss(renderer, curr_img, mask_usq, lambda_mask=10):
+def compute_raft_mask_loss(renderer, curr_img, mask_usq):
     """
     Compute RAFT-based mask preservation loss.
     
@@ -213,7 +213,6 @@ def compute_raft_mask_loss(renderer, curr_img, mask_usq, lambda_mask=10):
         renderer: Renderer object
         curr_img: Current image tensor [1, 3, H, W], value range [0, 255]
         mask_usq: Binary mask tensor [1, 1, H, W], 0 for background, 1 for region to preserve
-        lambda_mask: Loss weight coefficient
         
     Returns:
         loss_fix: RAFT-based mask preservation loss
@@ -256,10 +255,7 @@ def compute_raft_mask_loss(renderer, curr_img, mask_usq, lambda_mask=10):
     # Compute masked loss
     loss = (flow_magnitude * mask_usq).mean()
     
-    # Apply weight
-    loss_fix = lambda_mask * loss
-    
-    return loss_fix
+    return loss
 
 
 def render_drag_impl(renderer, res,
@@ -375,7 +371,7 @@ def render_drag_impl(renderer, res,
                                              stored_feat_resize * mask_usq)
                 elif fixloss_type == 'raft':
                     # RAFT-based mask preservation loss
-                    loss_fix = 0.02 * compute_raft_mask_loss(renderer, curr_img_raft, mask_usq, lambda_mask)
+                    loss_fix = 0.6*compute_raft_mask_loss(renderer, curr_img_raft, mask_usq)
                 else:
                     loss_fix = F.l1_loss(feat_resize * mask_usq,
                                         renderer.feat0_resize * mask_usq)

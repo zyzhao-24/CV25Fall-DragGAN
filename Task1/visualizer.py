@@ -269,6 +269,16 @@ with gr.Blocks() as app:
                 with gr.Row():
                     form_start_btn = gr.Button("Start", variant="primary")
                     form_stop_btn = gr.Button("Stop", variant="stop")
+                
+                # Manual Point Entry
+                with gr.Accordion("Manual Point Entry", open=False):
+                     with gr.Row():
+                         handle_x = gr.Number(label="Handle X")
+                         handle_y = gr.Number(label="Handle Y")
+                     with gr.Row():
+                         target_x = gr.Number(label="Target X")
+                         target_y = gr.Number(label="Target Y")
+                     btn_add_manual = gr.Button("Add Manual Point Pair")
 
                 form_steps_number = gr.Number(
                     value=0,
@@ -277,10 +287,9 @@ with gr.Blocks() as app:
                 
                 # Tracking Method Selection
                 form_tracking_method = gr.Dropdown(
-                    choices=['mixed', 'raft', 'L2'],
+                    choices=['mixed', 'raft', 'L2', 'area_wise'],
                     value=global_state.value['params']['tracking_method'],
                     label="Tracking Method",
-                    info="Select point tracking method: mixed (RAFT+L2), raft (optical flow only), or L2 (feature matching only)"
                 )
 
             # Mask 设置
@@ -809,15 +818,54 @@ with gr.Blocks() as app:
                             inputs=[global_state, form_image],
                             outputs=[global_state, form_image])
 
+    def on_add_manual_point(h_x, h_y, t_x, t_y, global_state):
+        if h_x is None or h_y is None or t_x is None or t_y is None:
+             return global_state, global_state['images']['image_show']
+        
+        points = global_state["points"]
+        # Find next available index
+        if not points:
+            new_idx = 0
+        else:
+            new_idx = max(points.keys()) + 1
+            
+        points[new_idx] = {
+            'start': [int(h_x), int(h_y)],
+            'target': [int(t_x), int(t_y)]
+        }
+        print(f'Manual Point Added: Start=({int(h_x)},{int(h_y)}), Target=({int(t_x)},{int(t_y)})')
+        
+        image_raw = global_state['images']['image_raw']
+        image_draw = update_image_draw(
+            image_raw,
+            global_state['points'],
+            global_state['mask'],
+            global_state['show_mask'],
+            global_state,
+        )
+        return global_state, image_draw
+
+    btn_add_manual.click(
+        on_add_manual_point,
+        inputs=[handle_x, handle_y, target_x, target_y, global_state],
+        outputs=[global_state, form_image]
+    )
+
     def on_click_image(global_state, evt: gr.SelectData):
         """This function only support click for point selection
         """
         xy = evt.index
+        # Returns for coordinate updates
+        h_x_upd = gr.Number.update()
+        h_y_upd = gr.Number.update()
+        t_x_upd = gr.Number.update()
+        t_y_upd = gr.Number.update()
+
         if global_state['editing_state'] != 'add_points':
             print(f'In {global_state["editing_state"]} state. '
                   'Do not add points.')
 
-            return global_state, global_state['images']['image_show']
+            return global_state, global_state['images']['image_show'], h_x_upd, h_y_upd, t_x_upd, t_y_upd
 
         points = global_state["points"]
 
@@ -825,12 +873,29 @@ with gr.Blocks() as app:
         if point_idx is None:
             points[0] = {'start': xy, 'target': None}
             print(f'Click Image - Start - {xy}')
+            # Update Handle Coordinates
+            h_x_upd = gr.Number.update(value=xy[0])
+            h_y_upd = gr.Number.update(value=xy[1])
+            t_x_upd = gr.Number.update(value=None)
+            t_y_upd = gr.Number.update(value=None)
+
         elif points[point_idx].get('target', None) is None:
             points[point_idx]['target'] = xy
             print(f'Click Image - Target - {xy}')
+            # Update Target Coordinates (Recall Handle coords?)
+            # Ideally we want to keep Handle displayed, so we don't update them (or update with existing)
+            # But gr.Number.update() without value keeps existing? usually yes.
+            t_x_upd = gr.Number.update(value=xy[0])
+            t_y_upd = gr.Number.update(value=xy[1])
+            
         else:
             points[point_idx + 1] = {'start': xy, 'target': None}
             print(f'Click Image - Start - {xy}')
+            # New Pair, Update Handle, Clear Target
+            h_x_upd = gr.Number.update(value=xy[0])
+            h_y_upd = gr.Number.update(value=xy[1])
+            t_x_upd = gr.Number.update(value=None)
+            t_y_upd = gr.Number.update(value=None)
 
         image_raw = global_state['images']['image_raw']
         image_draw = update_image_draw(
@@ -841,12 +906,12 @@ with gr.Blocks() as app:
             global_state,
         )
 
-        return global_state, image_draw
+        return global_state, image_draw, h_x_upd, h_y_upd, t_x_upd, t_y_upd
 
     form_image.select(
         on_click_image,
         inputs=[global_state],
-        outputs=[global_state, form_image],
+        outputs=[global_state, form_image, handle_x, handle_y, target_x, target_y],
     )
 
     def on_click_clear_points(global_state):
@@ -863,11 +928,13 @@ with gr.Blocks() as app:
         image_raw = global_state['images']['image_raw']
         image_draw = update_image_draw(image_raw, {}, global_state['mask'],
                                        global_state['show_mask'], global_state)
-        return global_state, image_draw
+        
+        # Clear manual inputs
+        return global_state, image_draw, gr.Number.update(value=None), gr.Number.update(value=None), gr.Number.update(value=None), gr.Number.update(value=None)
 
     undo_points.click(on_click_clear_points,
                       inputs=[global_state],
-                      outputs=[global_state, form_image])
+                      outputs=[global_state, form_image, handle_x, handle_y, target_x, target_y])
 
     def on_click_show_mask(global_state, show_mask):
         """Function to control whether show mask on image."""

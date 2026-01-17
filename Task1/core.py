@@ -15,6 +15,8 @@ import copy
 # Handle tracking method 'raft', 'L2', 'mixed'
 # tracking_method is now passed as a parameter to render_drag_impl
 is_save = False
+TEXTURE_LESS_THRESHOLD = 15
+r_var = 5
 
 
 class RAFTArgs:
@@ -33,10 +35,11 @@ def point_tracking_L2_point(renderer, feat_resize, points, r2, h, w):
     with torch.no_grad():
         for j, point in enumerate(points):
             r = round(r2 / 512 * h)
-            up = max(point[0] - r, 0)
-            down = min(point[0] + r + 1, h)
-            left = max(point[1] - r, 0)
-            right = min(point[1] + r + 1, w)
+            py, px = int(round(point[0])), int(round(point[1]))
+            up = max(py - r, 0)
+            down = min(py + r + 1, h)
+            left = max(px - r, 0)
+            right = min(px + r + 1, w)
             feat_patch = feat_resize[:, :, up:down, left:right]
             L2 = torch.linalg.norm(
                 feat_patch - renderer.feat_refs[j].reshape(1, -1, 1, 1), dim=1)
@@ -102,7 +105,6 @@ def point_tracking_raft(renderer, points, last_img, curr_img, h, w):
             save_path = os.path.join(save_dir, f'flow_{save_count:04d}.png')
             save_flow_viz(last_img, flow_up, save_path)
 
-        new_points = []
         # Update points
         for j, point in enumerate(points):
             # Point is [y, x]
@@ -128,6 +130,7 @@ def point_tracking_raft(renderer, points, last_img, curr_img, h, w):
 def point_tracking_mix(renderer, feat_resize, points, last_img, curr_img, r3, h, w):
     # 1.RAFT 粗跟踪
     points_copy = copy.deepcopy(points)
+    # RAFT gives float points
     points_raft = point_tracking_raft(
         renderer, points_copy, last_img, curr_img, h, w)
 
@@ -136,10 +139,12 @@ def point_tracking_mix(renderer, feat_resize, points, last_img, curr_img, r3, h,
         for j, point in enumerate(points_raft):
             # 将 RAFT 输出作为局部搜索中心
             r = round(r3 / 512 * h)
-            up = max(int(point[0] - r), 0)
-            down = min(int(point[0] + r + 1), h)
-            left = max(int(point[1] - r), 0)
-            right = min(int(point[1] + r + 1), w)
+            # Use int(round()) for slicing indices
+            py, px = int(round(point[0])), int(round(point[1]))
+            up = max(py - r, 0)
+            down = min(py + r + 1, h)
+            left = max(px - r, 0)
+            right = min(px + r + 1, w)
 
             # 提取局部特征 patch
             feat_patch = feat_resize[:, :, up:down, left:right]
@@ -150,10 +155,66 @@ def point_tracking_mix(renderer, feat_resize, points, last_img, curr_img, r3, h,
             _, idx = torch.min(L2.view(1, -1), -1)
 
             width = right - left
+            # L2 gives integer points
             refined_point = [idx.item() // width + up,
                              idx.item() % width + left]
-            points[j] = refined_point
+            
+            # Hybrid Strategy:
+            # If the refined point (L2) is very close to RAFT point (< 1 pixel),
+            # trust RAFT's sub-pixel precision.
+            # Otherwise, trust L2's discrete match (to fix drift).
+            raft_dist = ((point[0] - refined_point[0])**2 + (point[1] - refined_point[1])**2)**0.5
+            
+            if raft_dist < 1.5: # Threshold: if L2 confirms RAFT is roughly correct
+                 print(f"Point {j}: Hybrid - Keeping RAFT (dist={raft_dist:.2f})")
+                 points[j] = point # Keep RAFT's float point
+            else:
+                 print(f"Point {j}: Hybrid - Correcting with L2 (dist={raft_dist:.2f})")
+                 points[j] = refined_point # Snap to L2's integer point (corrected)
 
+    return points
+
+
+def point_tracking_area_wise(renderer, feat_resize, points, last_img, curr_img, r2, h, w):
+    # 1.RAFT
+    points_copy = copy.deepcopy(points)
+    points_raft = point_tracking_raft(
+        renderer, points_copy, last_img, curr_img, h, w)
+
+    # 2. L2
+    points_copy_2 = copy.deepcopy(points)
+    points_l2 = point_tracking_L2_point(
+        renderer, feat_resize, points_copy_2, r2, h, w)
+    
+    
+    # Calculate variances on last_image to decide
+    # last_img is [1, 3, H, W]
+    img_gray = last_img.float().mean(dim=1, keepdim=True) # [1, 1, H, W]
+    
+    for j, point in enumerate(points):
+        # Original point
+        py, px = int(round(point[0])), int(round(point[1]))
+        
+        up = max(py - r_var, 0)
+        down = min(py + r_var + 1, h)
+        left = max(px - r_var, 0)
+        right = min(px + r_var + 1, w)
+        
+        patch = img_gray[:, :, up:down, left:right]
+        if patch.numel() > 0:
+            std = torch.std(patch).item()
+        else:
+            std = 0
+        
+        # Threshold for texture richness
+        if std < TEXTURE_LESS_THRESHOLD: # Textureless -> RAFT
+            print(f"Point {j}: Textureless region (std={std:.2f}), using RAFT")
+            points[j] = points_raft[j]
+        else: # Rich texture -> L2
+            print(f"Point {j}: Rich texture region (std={std:.2f}), using L2")
+            # Use L2 point (points_l2[j] is integer)
+            points[j] = points_l2[j]
+            
     return points
 
 
@@ -268,6 +329,12 @@ def render_drag_impl(renderer, res,
             if hasattr(renderer, 'last_image') and renderer.last_image is not None:
                 points = point_tracking_mix(
                     renderer, feat_resize, points, renderer.last_image, curr_img_raft, r3, h, w)
+            else:
+                points = points
+        elif tracking_method == 'area_wise':
+            if hasattr(renderer, 'last_image') and renderer.last_image is not None:
+                points = point_tracking_area_wise(
+                    renderer, feat_resize, points, renderer.last_image, curr_img_raft, r2, h, w)
             else:
                 points = points
         else:

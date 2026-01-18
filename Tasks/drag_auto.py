@@ -429,9 +429,18 @@ def compute_matching_points_distance(handle_points, target_points, img1, img2, m
     avg_dist = float(np.mean(distances))
     return avg_dist, distances
 
-def run_drag_eval(model_pkl, seed=0, out_dir='./eval_out',
-                  num_drag_points=2, drag_iterations=20,
-                  mask_type='center_circle', use_cascaded_blending=False):
+def run_drag_eval(
+    model_pkl,
+    seed=0,
+    out_dir='./eval_out',
+    num_drag_points=2,
+    drag_iterations=20,
+    mask_type='center_circle',
+    use_cascaded_blending=False,
+    override_handle_points=None,
+    override_target_points=None
+):
+
     """Run drag evaluation with mask.
     
     Args:
@@ -475,9 +484,16 @@ def run_drag_eval(model_pkl, seed=0, out_dir='./eval_out',
     Image.fromarray((mask * 255).astype(np.uint8)).save(os.path.join(out_dir, 'mask.png'))
     
     # Generate drag points
-    print("Step 4: Generating drag points in mask region...")
-    handle_points, target_points = generate_drag_points(img1, mask, num_points=num_drag_points)
-    
+    # Step 4: drag points
+    if override_handle_points is not None:
+        handle_points = override_handle_points
+        target_points = override_target_points
+        print(f"  Using benchmark points: {len(handle_points)} pairs")
+    else:
+        handle_points, target_points = generate_drag_points(
+            img1, mask, num_points=num_drag_points
+        )
+
         # Save visualization on original image
     print("Step 4.1: Saving point-pair visualization on original image...")
     vis1 = draw_point_pairs(img1, handle_points, target_points, r=6, draw_line=True)

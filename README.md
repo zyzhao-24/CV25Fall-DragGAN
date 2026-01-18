@@ -130,6 +130,12 @@ bash scripts/eval_tracking_areawise.sh
 
 if you are using a windows system, directly paste the content of corresponding file into your terminal.
 
+### 4.3 Generate variance heatmap
+
+```bash
+python variance_heatmap.py
+```
+
 ## 5. Project Structure
 
 ```
@@ -140,6 +146,7 @@ CV25Fall-DragGAN/
 ├── drag_auto.py               # Automated drag operations
 ├── drag_multi.py              # Multi-point drag operations
 ├── evaluation.py              # Evaluation utilities
+├── variance_heatmap.py        # Visualize variance heatmap
 ├── environment.yml            # Conda environment configuration
 ├── scripts/                   # Evaluation and download scripts
 ├── checkpoints/               # Pre-trained model checkpoints

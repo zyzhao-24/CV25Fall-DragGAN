@@ -3,6 +3,7 @@
 This repository is part of submitted files of computer vision project for 2025 fall semester. It contains an enhanced implementation of DragGAN with advanced tracking methods and cascaded blending techniques.
 
 **Team Members:**
+
 - 2400017711 赵泽宇
 - 2400017808 王唐欣宇  
 - 2400017766 鄢宇阳
@@ -23,13 +24,12 @@ This project extends the original DragGAN implementation with several key enhanc
 
 ## 1. Installation
 
-The code has been tested on Windows 11 with NVIDIA GPU. Experiments were conducted with PyTorch 2.0.1 and CUDA 11.8, though other versions may also be compatible.
-
-Install [Conda](https://www.anaconda.com/) and create a Conda environment using the provided environment.yml file:
+Install [Conda](https://www.anaconda.com/) and create a Conda environment using the provided environment.yml file, then manually install pytorch (due to requirement of cuda compiled package):
 
 ```bash
 conda env create -f environment.yml
 conda activate draggan_project
+pip install torch==2.7.0+cu128 torchvision --extra-index-url https://download.pytorch.org/whl/cu128
 ```
 
 ### Download Pre-trained Models
@@ -138,7 +138,7 @@ python variance_heatmap.py
 
 ## 5. Project Structure
 
-```
+```plain
 CV25Fall-DragGAN/
 ├── core.py                    # Main drag implementation with tracking methods
 ├── core_blending.py           # Cascaded blending implementation
